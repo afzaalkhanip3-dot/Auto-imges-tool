@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ur">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bulk AI Image Generator — Nano Banana</title>
+<style>
+:root{--bg:#0f1115;--panel:#181b22;--border:#2a2e38;--acc:#ffcc33;--text:#eee;--muted:#9aa0ab}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif;padding:12px}
+h1{font-size:18px;margin:0 0 12px}
+.wrap{display:flex;flex-direction:column;gap:14px}
+@media(min-width:800px){.wrap{flex-direction:row}}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px;flex:1}
+label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+textarea,input[type=text],input[type=password],select{width:100%;background:#0f1115;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:14px}
+textarea{min-height:110px;resize:vertical}
+.ratios{display:flex;flex-wrap:wrap;gap:6px}
+.ratios button{flex:1;min-width:60px;background:#0f1115;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 4px;font-size:12px;cursor:pointer}
+.ratios button.active{background:var(--acc);color:#000;border-color:var(--acc);font-weight:bold}
+.btn{width:100%;padding:12px;background:var(--acc);color:#000;font-weight:bold;border:none;border-radius:8px;font-size:15px;margin-top:14px;cursor:pointer}
+.btn:disabled{opacity:.5}
+#status{font-size:13px;color:var(--muted);margin-top:8px;white-space:pre-line}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px;margin-top:10px}
+#grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;border:1px solid var(--border)}
+.dl{display:none}
+</style>
+</head>
+<body>
+<h1>Bulk Image Generator — Nano Banana (Gemini)</h1>
+<div class="wrap">
+  <div class="panel">
+    <label>1) Prompts file upload karein (.txt, har line ek prompt)</label>
+    <input type="file" id="fileInput" accept=".txt">
+    <label>Ya seedha yahan paste karein (har line ek prompt)</label>
+    <textarea id="promptsBox" placeholder="Prompt 1&#10;Prompt 2&#10;Prompt 3"></textarea>
+
+    <label>2) Aspect Ratio</label>
+    <div class="ratios" id="ratios">
+      <button data-r="1:1" class="active">1:1</button>
+      <button data-r="16:9">16:9</button>
+      <button data-r="9:16">9:16</button>
+      <button data-r="4:3">4:3</button>
+      <button data-r="3:4">3:4</button>
+    </div>
+
+    <label>3) Gemini API Key (Google AI Studio se free milti hai)</label>
+    <input type="password" id="apiKey" placeholder="AIza...">
+    <label>Model — Nano Banana 2</label>
+    <select id="model">
+      <option value="gemini-3.1-flash-image">gemini-3.1-flash-image (GA)</option>
+      <option value="gemini-3.1-flash-image-preview">gemini-3.1-flash-image-preview</option>
+    </select>
+
+    <button class="btn" id="genBtn">Images Generate Karein</button>
+    <div id="status"></div>
+  </div>
+
+  <div class="panel">
+    <label>Ready Images</label>
+    <div id="grid"></div>
+    <button class="btn dl" id="dlBtn">ZIP Download Karein</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+let ratio = "1:1";
+document.querySelectorAll('#ratios button').forEach(b=>{
+  b.onclick=()=>{document.querySelectorAll('#ratios button').forEach(x=>x.classList.remove('active'));b.classList.add('active');ratio=b.dataset.r;};
+});
+
+document.getElementById('fileInput').onchange = async (e)=>{
+  const f = e.target.files[0]; if(!f) return;
+  document.getElementById('promptsBox').value = await f.text();
+};
+
+const images = []; // {name, base64}
+const statusEl = document.getElementById('status');
+const grid = document.getElementById('grid');
+const dlBtn = document.getElementById('dlBtn');
+
+async function generateOne(prompt, model, key){
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const body = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { responseModalities: ["IMAGE"], imageConfig: { aspectRatio: ratio } }
+  };
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+    body: JSON.stringify(body)
+  });
+  if(!res.ok){ const t = await res.text(); throw new Error(`API error ${res.status}: ${t.slice(0,150)}`); }
+  const data = await res.json();
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  const imgPart = parts.find(p=>p.inlineData || p.inline_data);
+  const inline = imgPart?.inlineData || imgPart?.inline_data;
+  if(!inline) throw new Error('Koi image data nahi mili — prompt ya key check karein');
+  return inline.data; // base64
+}
+
+document.getElementById('genBtn').onclick = async ()=>{
+  const key = document.getElementById('apiKey').value.trim();
+  const model = document.getElementById('model').value;
+  const prompts = document.getElementById('promptsBox').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  if(!key){ statusEl.textContent='Pehle API key dalein.'; return; }
+  if(!prompts.length){ statusEl.textContent='Pehle prompts dalein ya file upload karein.'; return; }
+
+  images.length = 0; grid.innerHTML=''; dlBtn.style.display='none';
+  const btn = document.getElementById('genBtn'); btn.disabled = true;
+
+  for(let i=0;i<prompts.length;i++){
+    statusEl.textContent = `Generating ${i+1} / ${prompts.length} ...`;
+    try{
+      const b64 = await generateOne(prompts[i], model, key);
+      const name = `image_${String(i+1).padStart(3,'0')}.png`;
+      images.push({name, b64});
+      const img = document.createElement('img');
+      img.src = `data:image/png;base64,${b64}`;
+      grid.appendChild(img);
+    }catch(err){
+      statusEl.textContent = `Prompt ${i+1} par error: ${err.message}`;
+      await new Promise(r=>setTimeout(r,1200));
+    }
+    await new Promise(r=>setTimeout(r,400)); // rate-limit ke liye chhota gap
+  }
+  btn.disabled = false;
+  statusEl.textContent = `Mukammal — ${images.length}/${prompts.length} images ready.`;
+  if(images.length) dlBtn.style.display='block';
+};
+
+dlBtn.onclick = async ()=>{
+  const zip = new JSZip();
+  images.forEach(im=> zip.file(im.name, im.b64, {base64:true}));
+  const blob = await zip.generateAsync({type:'blob'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'images.zip';
+  a.click();
+};
+</script>
+</body>
+</html>
